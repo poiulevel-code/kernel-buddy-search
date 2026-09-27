@@ -205,9 +205,7 @@ export const getRoomState = createServerFn({ method: "POST" })
     // İzleyenin takımı: oyuncu kendi takımının, sunucu 1. takımın sorusunu görür
     const myTeam = (players ?? []).find((p: any) => p.id === data.playerId)?.team ?? 1;
     const myQid = qidFor(myTeam, round);
-    const nextImageUrl: string | null = needsQuestion
-      ? ((qRes.data ?? []) as any[]).find((q) => q.id === qidFor(myTeam, round + 1))?.image_url ?? null
-      : null;
+    const nextImageUrl: string | null = null;
 
     if (needsQuestion && myQid) {
       const q = ((qRes.data ?? []) as any[]).find((row) => row.id === myQid);
@@ -297,25 +295,29 @@ export const submitAnswer = createServerFn({ method: "POST" })
     if (room.status !== "PLAYING") throw new Error("Şu anda cevap verilemez");
 
     const questionIds = (room.question_ids ?? []) as string[];
-    const currentId = questionIds[room.current_question];
-    if (!currentId) throw new Error("Aktif soru yok");
+    const round = room.current_question as number;
 
-    // Oyuncu, soru ve mevcut cevaplar aynı anda sorgulanır — cevap süresi kısalır
-    const [playerRes, qRes, answersRes] = await Promise.all([
+    // Oyuncu ve odadaki tüm cevaplar aynı anda sorgulanır — cevap süresi kısalır
+    const [playerRes, answersRes] = await Promise.all([
       supabase.from("players").select("id, team, room_id").eq("id", data.playerId).maybeSingle(),
       supabase
-        .from("questions")
-        .select("correct_answer_text, option_a, option_b, option_c, option_d, question_type")
-        .eq("id", currentId)
-        .maybeSingle(),
-      supabase
         .from("answers")
-        .select("id, player_id, is_correct, created_at")
-        .eq("room_id", room.id)
-        .eq("question_id", currentId),
+        .select("id, player_id, question_id, is_correct, created_at")
+        .eq("room_id", room.id),
     ]);
     const player = playerRes.data;
     if (!player || player.room_id !== room.id) throw new Error("Oyuncu bu odada değil");
+
+    // Her takımın bu turdaki sorusu farklıdır: çift sıra 1. takım, tek sıra 2. takım
+    const currentId = questionIds[round * 2 + (player.team - 1)];
+    if (!currentId) throw new Error("Aktif soru yok");
+    const roundIds = [questionIds[round * 2], questionIds[round * 2 + 1]].filter(Boolean);
+
+    const { data: qRow } = await supabase
+      .from("questions")
+      .select("correct_answer_text, option_a, option_b, option_c, option_d, question_type")
+      .eq("id", currentId)
+      .maybeSingle();
     const qRow = qRes.data;
     if (!qRow) throw new Error("Soru bulunamadı");
     const q = { ...qRow, correct_answer: qRow.correct_answer_text ?? "" };
