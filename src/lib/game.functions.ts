@@ -3,10 +3,9 @@ import { createServerFn } from "@tanstack/react-start";
 const QUESTION_COUNT = 10;
 const STEP = 10;
 const WIN_LIMIT = 50;
-// Bu süre içinde iki takım da doğru bilirse "aynı anda" sayılır: halat yerinde kalır.
-const SAME_TIME_MS = 1500;
-const FIRST_POINTS = 2;
-const SECOND_POINTS = 1;
+// Bu süre içinde iki takım da doğru bilirse "aynı anda" sayılır: halat yerinde kalır, kimse puan almaz.
+const SAME_TIME_MS = 300;
+const FIRST_POINTS = 1;
 
 export type RoomStatus = "WAITING" | "READY" | "PLAYING" | "PAUSED" | "FINISHED";
 
@@ -254,12 +253,11 @@ export const getRoomState = createServerFn({ method: "POST" })
       list.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
       const firstTeam = teamOf.get(list[0]!.player_id);
       const t0 = Date.parse(list[0]!.created_at);
-      if (firstTeam === 1 || firstTeam === 2) scores[firstTeam] += FIRST_POINTS;
-      const other = list.find(
+      const simultaneous = list.some(
         (a) => teamOf.get(a.player_id) !== firstTeam && Date.parse(a.created_at) - t0 <= SAME_TIME_MS,
       );
-      const ot = other ? teamOf.get(other.player_id) : undefined;
-      if (ot === 1 || ot === 2) scores[ot] += SECOND_POINTS;
+      // Aynı anda bilindiyse kimse puan almaz (halat sabit); değilse yalnızca ilk doğru puan alır
+      if (!simultaneous && (firstTeam === 1 || firstTeam === 2)) scores[firstTeam] += FIRST_POINTS;
     }
 
     return {
@@ -384,6 +382,17 @@ export const controlRoom = createServerFn({ method: "POST" })
     const supabase = await db();
     const room = await loadRoom(data.code);
     const questionIds = (room.question_ids ?? []) as string[];
+
+    if (data.action === "shuffle") {
+      if (room.status === "PLAYING") throw new Error("Oyun sırasında karıştırılamaz");
+      const shuffled = [...questionIds];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+      }
+      await supabase.from("rooms").update({ question_ids: shuffled }).eq("id", room.id);
+      return { ok: true };
+    }
 
     if (data.action === "start") {
       await supabase
