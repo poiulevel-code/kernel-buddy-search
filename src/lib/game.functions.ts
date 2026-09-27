@@ -401,7 +401,8 @@ export const controlRoom = createServerFn({ method: "POST" })
 
     if (data.action === "next") {
       const nextIndex = room.current_question + 1;
-      if (nextIndex >= questionIds.length) {
+      const totalRounds = Math.floor(questionIds.length / 2);
+      if (nextIndex >= totalRounds) {
         const winner =
           room.rope_position < 0 ? "TEAM1" : room.rope_position > 0 ? "TEAM2" : "TIE";
         await supabase.from("rooms").update({ status: "FINISHED", winner }).eq("id", room.id);
