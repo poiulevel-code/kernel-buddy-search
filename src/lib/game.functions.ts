@@ -166,31 +166,29 @@ export const getRoomState = createServerFn({ method: "POST" })
     const room = await loadRoom(data.code);
 
     const questionIds = (room.question_ids ?? []) as string[];
-    const currentId = questionIds[room.current_question] ?? null;
+    // Her turda iki takıma farklı soru düşer: çift sıra 1. takım, tek sıra 2. takım.
+    const round = room.current_question as number;
+    const totalRounds = Math.floor(questionIds.length / 2);
+    const qidFor = (team: number, r: number) => questionIds[r * 2 + (team - 1)] ?? null;
+    const roundIds = [qidFor(1, round), qidFor(2, round)].filter(Boolean) as string[];
 
     let question: PublicQuestion | null = null;
     let answeredIds: string[] = [];
     let me: RoomState["me"] = null;
     let resolved = false;
 
-    // Oyuncular, soru ve tüm cevaplar aynı anda sorgulanır — durum güncellemesi hızlanır
-    const needsQuestion = currentId && room.status !== "WAITING" && room.status !== "READY";
-    const upcomingId = needsQuestion ? questionIds[room.current_question + 1] ?? null : currentId;
-    const [playersRes, qRes, answersRes, nextRes] = await Promise.all([
+    // Oyuncular, tur soruları ve tüm cevaplar aynı anda sorgulanır — durum güncellemesi hızlanır
+    const needsQuestion = roundIds.length > 0 && room.status !== "WAITING" && room.status !== "READY";
+    const [playersRes, qRes, answersRes] = await Promise.all([
       supabase.from("players").select("id, name, team, connected").eq("room_id", room.id).order("team"),
       needsQuestion
         ? supabase
             .from("questions")
-            .select("question, option_a, option_b, option_c, option_d, question_type, category, difficulty, image_url")
-            .eq("id", currentId)
-            .maybeSingle()
-        : Promise.resolve({ data: null }),
+            .select("id, question, option_a, option_b, option_c, option_d, question_type, category, difficulty, image_url")
+            .in("id", roundIds)
+        : Promise.resolve({ data: [] }),
       supabase.from("answers").select("player_id, question_id, answer_text, is_correct, created_at").eq("room_id", room.id),
-      upcomingId
-        ? supabase.from("questions").select("image_url").eq("id", upcomingId).maybeSingle()
-        : Promise.resolve({ data: null }),
     ]);
-    const nextImageUrl: string | null = (nextRes as any).data?.image_url ?? null;
 
     const players = playersRes.data;
     const allAnswers = (answersRes.data ?? []) as Array<{
@@ -204,43 +202,57 @@ export const getRoomState = createServerFn({ method: "POST" })
       (playersRes.data ?? []).map((p: any) => [p.id, p.team as number]),
     );
 
-    if (needsQuestion && qRes.data) {
-      const q = qRes.data;
-      question = {
-        index: room.current_question + 1,
-        total: questionIds.length,
-        question: q.question,
-        type: (q.question_type as PublicQuestion["type"]) ?? "multiple",
-        options:
-          q.question_type === "fill"
-            ? { A: "", B: "", C: "", D: "" }
-            : { A: q.option_a, B: q.option_b, C: q.option_c, D: q.option_d },
-        category: q.category,
-        difficulty: q.difficulty,
-        imageUrl: q.image_url ?? null,
-      };
-      const currentAnswers = allAnswers.filter((a) => a.question_id === currentId);
-      answeredIds = currentAnswers.map((a) => a.player_id);
-      // Soru yalnızca doğru cevap verildiğinde çözülür; yanlış cevap veren denemeye devam eder.
-      const corrects = currentAnswers
+    // İzleyenin takımı: oyuncu kendi takımının, sunucu 1. takımın sorusunu görür
+    const myTeam = (players ?? []).find((p: any) => p.id === data.playerId)?.team ?? 1;
+    const myQid = qidFor(myTeam, round);
+    const nextImageUrl: string | null = needsQuestion
+      ? ((qRes.data ?? []) as any[]).find((q) => q.id === qidFor(myTeam, round + 1))?.image_url ?? null
+      : null;
+
+    if (needsQuestion && myQid) {
+      const q = ((qRes.data ?? []) as any[]).find((row) => row.id === myQid);
+      if (q) {
+        question = {
+          index: round + 1,
+          total: totalRounds,
+          question: q.question,
+          type: (q.question_type as PublicQuestion["type"]) ?? "multiple",
+          options:
+            q.question_type === "fill"
+              ? { A: "", B: "", C: "", D: "" }
+              : { A: q.option_a, B: q.option_b, C: q.option_c, D: q.option_d },
+          category: q.category,
+          difficulty: q.difficulty,
+          imageUrl: q.image_url ?? null,
+        };
+      }
+      const roundAnswers = allAnswers.filter((a) => roundIds.includes(a.question_id));
+      answeredIds = roundAnswers.map((a) => a.player_id);
+      // Tur yalnızca doğru cevap verildiğinde çözülür; yanlış cevap veren denemeye devam eder.
+      const corrects = roundAnswers
         .filter((a) => a.is_correct)
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
       if (corrects.length) {
         const teams = new Set(corrects.map((a) => teamOf.get(a.player_id)));
         resolved = teams.has(1) && teams.has(2) || Date.now() - Date.parse(corrects[0]!.created_at) > SAME_TIME_MS;
       }
-      const mine = currentAnswers.find((a) => a.player_id === data.playerId);
+      const mine = allAnswers.find((a) => a.player_id === data.playerId && a.question_id === myQid);
       if (mine) me = { answer: mine.answer_text ?? "", isCorrect: mine.is_correct };
     }
 
-    // Puan: soruyu ilk doğru bilen takım 2, aynı anda (kısa süre içinde) bilen diğer takım 1 puan
+    // Puan: turu ilk doğru bilen takım 2, aynı anda (kısa süre içinde) bilen diğer takım 1 puan
     const scores: { 1: number; 2: number } = { 1: 0, 2: 0 };
-    const byQ = new Map<string, typeof allAnswers>();
+    const roundOf = new Map<string, number>(
+      questionIds.map((id, i) => [id, Math.floor(i / 2)]),
+    );
+    const byRound = new Map<number, typeof allAnswers>();
     for (const a of allAnswers) {
       if (!a.is_correct) continue;
-      byQ.set(a.question_id, [...(byQ.get(a.question_id) ?? []), a]);
+      const r = roundOf.get(a.question_id);
+      if (r === undefined) continue;
+      byRound.set(r, [...(byRound.get(r) ?? []), a]);
     }
-    for (const list of byQ.values()) {
+    for (const list of byRound.values()) {
       list.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
       const firstTeam = teamOf.get(list[0]!.player_id);
       const t0 = Date.parse(list[0]!.created_at);
