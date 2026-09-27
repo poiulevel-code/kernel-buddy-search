@@ -358,16 +358,38 @@ export const submitAnswer = createServerFn({ method: "POST" })
       if (insErr) throw new Error("Cevap kaydedilemedi");
     }
 
-    // İlk doğru: halat o takıma çekilir. Diğer takım aynı anda bilirse halat geri döner (yerinde kalır).
+    // Halat her cevapta tüm cevap geçmişinden yeniden hesaplanır:
+    // turu ilk doğru bilen takım halatı kendi yönüne çeker; diğer takım
+    // aynı anda (SAME_TIME_MS içinde) bilirse o turda halat hiç kımıldamaz.
     if (isCorrect) {
-      const dir = player.team === 1 ? -STEP : STEP;
-      const delta = dir;
-      const next = Math.max(-WIN_LIMIT, Math.min(WIN_LIMIT, room.rope_position + delta));
-      // Yarışma yalnızca sorular bitince sona erer; halat sınıra ulaşsa bile devam eder.
-      await supabase
-        .from("rooms")
-        .update({ rope_position: next })
-        .eq("id", room.id);
+      const { data: allAns } = await supabase
+        .from("answers")
+        .select("player_id, question_id, is_correct, created_at")
+        .eq("room_id", room.id);
+      const roundOfQ = new Map<string, number>(
+        questionIds.map((id, i) => [id, Math.floor(i / 2)]),
+      );
+      const byRound = new Map<number, any[]>();
+      for (const a of (allAns ?? []) as any[]) {
+        if (!a.is_correct) continue;
+        const r = roundOfQ.get(a.question_id);
+        if (r === undefined) continue;
+        byRound.set(r, [...(byRound.get(r) ?? []), a]);
+      }
+      let rope = 0;
+      for (const list of byRound.values()) {
+        list.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+        const firstTeam = teamMap.get(list[0]!.player_id);
+        const t0 = Date.parse(list[0]!.created_at);
+        const simultaneous = list.some(
+          (a) => teamMap.get(a.player_id) !== firstTeam && Date.parse(a.created_at) - t0 <= SAME_TIME_MS,
+        );
+        if (simultaneous) continue; // aynı anda: halat sabit
+        if (firstTeam === 1) rope -= STEP;
+        else if (firstTeam === 2) rope += STEP;
+      }
+      rope = Math.max(-WIN_LIMIT, Math.min(WIN_LIMIT, rope));
+      await supabase.from("rooms").update({ rope_position: rope }).eq("id", room.id);
     }
 
     return { isCorrect };
