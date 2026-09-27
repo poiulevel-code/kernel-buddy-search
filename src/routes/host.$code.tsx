@@ -49,6 +49,7 @@ function HostScreen() {
   const control = useServerFn(controlRoom);
   const [pulse, setPulse] = useState<1 | 2 | null>(null);
   const [lobbyOpen, setLobbyOpen] = useState(false);
+  const [shuffled, setShuffled] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const arenaRef = useRef<HTMLDivElement>(null);
   const prevPos = useRef(0);
@@ -202,6 +203,17 @@ function HostScreen() {
                 className="mt-2 min-h-11 w-full max-w-md rounded-full bg-foreground px-3 text-sm font-bold text-background hover:bg-foreground/90 sm:mt-3 sm:min-h-14 sm:text-lg"
               >
                 {data.players.length === 2 ? "OYUNU BAŞLAT" : "OYUNCU BEKLEMEDEN BAŞLAT"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  act("shuffle");
+                  setShuffled(true);
+                  setTimeout(() => setShuffled(false), 1500);
+                }}
+                className="mt-2 min-h-10 w-full max-w-md rounded-full border-2 border-border bg-panel text-sm font-bold text-foreground hover:bg-muted"
+              >
+                {shuffled ? "SORULAR KARIŞTIRILDI ✓" : "SORULARI KARIŞTIR"}
               </Button>
               </div>
             </section>
