@@ -318,10 +318,9 @@ export const submitAnswer = createServerFn({ method: "POST" })
       .select("correct_answer_text, option_a, option_b, option_c, option_d, question_type")
       .eq("id", currentId)
       .maybeSingle();
-    const qRow = qRes.data;
     if (!qRow) throw new Error("Soru bulunamadı");
     const q = { ...qRow, correct_answer: qRow.correct_answer_text ?? "" };
-    const existing = (answersRes.data ?? []) as any[];
+    const existing = ((answersRes.data ?? []) as any[]).filter((a) => roundIds.includes(a.question_id));
     const now = Date.now();
     const priorCorrect = existing
       .filter((a) => a.is_correct)
@@ -343,7 +342,7 @@ export const submitAnswer = createServerFn({ method: "POST" })
             .some((v) => norm(v) === norm(data.answer))
         : data.answer.length === 1 &&
           q.correct_answer.toUpperCase().includes(data.answer.toUpperCase());
-    const mine = (existing ?? []).find((a: any) => a.player_id === player.id);
+    const mine = (existing ?? []).find((a: any) => a.player_id === player.id && a.question_id === currentId);
     if (mine) {
       const { error: updErr } = await supabase
         .from("answers")
