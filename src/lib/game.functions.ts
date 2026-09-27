@@ -100,9 +100,13 @@ export const createRoom = createServerFn({ method: "POST" })
     questionIds = (questions ?? [])
       .filter((q: any) => q.question.trim() && q.option_a.trim() && (q.question_type === "fill" || q.option_b.trim()))
       .map((q: any) => q.id)
-      .sort(() => Math.random() - 0.5)
-      .slice(0, QUESTION_COUNT);
+      .slice(0, QUESTION_COUNT * 2);
   }
+
+  // Sorular her zaman karıştırılır; her turda iki takıma da FARKLI soru düşer
+  // (çift sıra 1. takıma, tek sıra 2. takıma) ve hiçbir soru tekrar etmez.
+  questionIds = questionIds.sort(() => Math.random() - 0.5);
+  if (questionIds.length % 2 === 1) questionIds = questionIds.slice(0, -1);
 
   for (let attempt = 0; attempt < 6; attempt++) {
     const code = makeCode();
